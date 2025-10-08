@@ -341,8 +341,120 @@
                 URL.revokeObjectURL(url);
             };
 
-            // Export summary as CSV
-            const exportSummaryCSV = () => {
+            // Export summary as CSV to OneDrive
+            const exportSummaryCSV = async () => {
+                if (!accessTokenRef.current) {
+                    alert('Not connected to OneDrive. Please sign in first.');
+                    return;
+                }
+                
+                if (!startDate) {
+                    alert('Please set a week starting date first.');
+                    return;
+                }
+                
+                setIsSyncing(true);
+                setSyncStatus('Saving summary to OneDrive...');
+                
+                try {
+                    const summary = getSummary();
+                    
+                    // Create CSV content
+                    let csv = 'Staff Member,Total Hours,Saturday Hours,Sunday Hours\n';
+                    summary.forEach(({ user, totalHours, saturdayHours, sundayHours }) => {
+                        const displayName = timesheetData[user]?.name || user;
+                        csv += `"${displayName}",${totalHours},${saturdayHours},${sundayHours}\n`;
+                    });
+                    
+                    // Add totals row
+                    const totals = {
+                        total: summary.reduce((sum, s) => sum + parseFloat(s.totalHours), 0).toFixed(2),
+                        saturday: summary.reduce((sum, s) => sum + parseFloat(s.saturdayHours), 0).toFixed(2),
+                        sunday: summary.reduce((sum, s) => sum + parseFloat(s.sundayHours), 0).toFixed(2)
+                    };
+                    csv += `"TOTAL",${totals.total},${totals.saturday},${totals.sunday}\n`;
+                    
+                    // Create folder structure: Timesheets/YYYY-MM-DD/
+                    const folderPath = `Timesheets/${startDate}`;
+                    const fileName = `summary-${startDate}.csv`;
+                    
+                    // Ensure the folder exists
+                    const folderUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}`;
+                    let folderCheck = await fetch(folderUrl, {
+                        headers: {
+                            'Authorization': `Bearer ${accessTokenRef.current}`
+                        }
+                    });
+                    
+                    // Create folder if it doesn't exist
+                    if (folderCheck.status === 404) {
+                        // Create Timesheets folder first
+                        let timesheetsFolder = await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/Timesheets`, {
+                            headers: {
+                                'Authorization': `Bearer ${accessTokenRef.current}`
+                            }
+                        });
+                        
+                        if (timesheetsFolder.status === 404) {
+                            await fetch(`https://graph.microsoft.com/v1.0/me/drive/root/children`, {
+                                method: 'POST',
+                                headers: {
+                                    'Authorization': `Bearer ${accessTokenRef.current}`,
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    name: 'Timesheets',
+                                    folder: {},
+                                    '@microsoft.graph.conflictBehavior': 'rename'
+                                })
+                            });
+                        }
+                        
+                        // Create week folder
+                        await fetch(`https://graph.microsoft.com/v1.0/me/drive/root:/Timesheets:/children`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${accessTokenRef.current}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                name: startDate,
+                                folder: {},
+                                '@microsoft.graph.conflictBehavior': 'rename'
+                            })
+                        });
+                    }
+                    
+                    // Upload CSV file
+                    const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderPath}/${fileName}:/content`;
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    
+                    const uploadResponse = await fetch(uploadUrl, {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `Bearer ${accessTokenRef.current}`,
+                            'Content-Type': 'text/csv'
+                        },
+                        body: blob
+                    });
+                    
+                    if (uploadResponse.ok) {
+                        setSyncStatus(`Summary saved to OneDrive/Timesheets/${startDate}/`);
+                        alert(`✅ Summary saved to OneDrive!\n\nLocation: Timesheets/${startDate}/${fileName}`);
+                    } else {
+                        throw new Error('Upload failed');
+                    }
+                } catch (error) {
+                    console.error('OneDrive CSV save error:', error);
+                    setSyncStatus('CSV save failed');
+                    alert('Failed to save summary to OneDrive. Please try again.');
+                } finally {
+                    setIsSyncing(false);
+                }
+            };
+
+            // Download summary as CSV (local backup option)
+            const downloadSummaryCSV = () => {
                 const weekStart = startDate || 'unspecified-date';
                 const summary = getSummary();
                 
